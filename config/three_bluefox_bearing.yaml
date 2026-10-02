@@ -1,0 +1,227 @@
+# Detector -> tracker -> bearing configuration for the three-camera rig started by
+# launch/three_bluefox.launch.py (left, right, back).
+#
+# A separate file rather than three inputs added to default_bearing.yaml, so that the
+# two-camera config keeps describing two cameras. Everything that is not per-camera -
+# thresholds, tracker tuning, blink sequences - is copied from default_bearing.yaml
+# unchanged; read that file's comments for what each value does. Change one of those
+# here and it applies to this rig only.
+#
+# Unlike default_bearing.yaml this file names no vehicle. The three stage nodes run in
+# the <uav> namespace and every topic below is relative to it, so the file works for
+# uav13 and for uav4 alike. Where a name is needed - `output_frame`, `camera_frame` -
+# $UAV_NAME is used, which helpers/yaml.hpp expands for every value it reads (and
+# refuses to load the file, naming the variable, if UAV_NAME is unset in the
+# environment). default_bearing.yaml pins uav4/fcu instead, which for any other vehicle
+# stamps its bearings in a frame belonging to a different robot.
+#
+# What has to agree with what
+# --------------------------
+#
+# A camera is named in four places that cannot see each other, and a disagreement
+# between them is not an error:
+#
+#   * `<S>/bluefox/image_raw`    what the camera publishes, from
+#                                single_bluefox.launch.py's node name `bluefox` under
+#                                namespace `<uav>/<S>`. This one is not a free choice -
+#                                rename the node and the detector reads nothing.
+#   * `camera_frame: $UAV_NAME/bluefox_<S>`  the frame that camera's own rays are
+#                                measured in. It is the string
+#                                single_bluefox.launch.py:134-137 builds for the
+#                                driver's frame_id, and it has to be the child-frame-id
+#                                of the mount three_bluefox.launch.py publishes for the
+#                                same slot: the bearing node looks the camera_frame ->
+#                                output_frame transform up in TF, and a frame no mount
+#                                publishes makes it drop that camera's observations
+#                                with a throttled warning naming both frames
+#                                (bearing_node.cpp:141-152). Nothing fails at startup.
+#   * detector `output_topic` == tracker `input_topic`, and tracker `output_topic` ==
+#                                bearing `input_topic`. The stages never compare these;
+#                                a mismatch starts every process, announces them all,
+#                                and stays silent forever. default_bearing.yaml's three
+#                                stages do agree, which is why this file copies its
+#                                shape rather than inventing one.
+#
+# There is deliberately no `output_topic` under an input. The bearing node reads
+# `bearing.output_topic` once for the whole section and publishes every input through
+# that one publisher (bearing_node.hpp:40, bearing_node.cpp:123); a per-input
+# `output_topic:` is never read, so listing one would advertise topics that cannot
+# exist. default_bearing.yaml carries such entries - they are inert there.
+#
+# The consequence for anything downstream, worth knowing before subscribing: all three
+# cameras arrive on `<uav>/uvdar/bearing/observations`, already rotated into
+# `output_frame` - one topic, but not one combined message. `onTrackerOutput` runs per
+# camera callback and publishes each one separately (bearing_node.cpp:218-221), so one
+# blinker that two cameras can see reaches a consumer as two messages whose order
+# nothing fixes, each carrying that camera's ray and its own `origin`. A consumer that
+# keeps the newest bearing per id - which is what a simple fusion does - therefore
+# alternates between the two cameras rather than settling between them; combining them
+# is what the per-observation `origin` is there to make possible, downstream.
+#
+# The `back` camera's calib_file does not exist yet. That is deliberate, and it stops
+# the bearing node at startup with a message about the lens model. The alternative -
+# pointing it at one of the two existing Bluefox calibrations - would produce bearings
+# that are numerically plausible and wrong for this lens, which no tool reports and
+# which looks exactly like a bad mount. Calibrate it (`calibrator.launch.py`) and put
+# the file at the path below, or change the line to wherever it lands.
+
+detector:
+  debug: false
+  gui: false
+  initial_delay_sec: 0.0
+  queue_depth: 10
+  # One worker per input, so three cameras' frames are not serialised through two.
+  thread_pool_size: 3
+  max_points_per_image: 100
+  inputs:
+    - name: left
+      input_topic: left/bluefox/image_raw
+      output_topic: uvdar/left/detector/points_seen
+      detect_sun_points: false
+      publish_sun_points: false
+      sun_output_topic: uvdar/left/detector/points_seen/sun
+      publish_visualization: false
+      visualization_topic: uvdar/left/detector/detection_visualization
+      mask_file: ""
+      backend: gpu
+      threshold: 140
+      threshold_diff: 60
+      threshold_sun: 240
+      min_sun_marker_distance: 20
+      max_markers_count: 300
+      max_sun_points_count: 72000
+      radii: [3, 5]
+    - name: right
+      input_topic: right/bluefox/image_raw
+      output_topic: uvdar/right/detector/points_seen
+      detect_sun_points: false
+      publish_sun_points: false
+      sun_output_topic: uvdar/right/detector/points_seen/sun
+      publish_visualization: false
+      visualization_topic: uvdar/right/detector/detection_visualization
+      mask_file: ""
+      backend: gpu
+      threshold: 140
+      threshold_diff: 60
+      threshold_sun: 240
+      min_sun_marker_distance: 20
+      max_markers_count: 300
+      max_sun_points_count: 72000
+      radii: [3, 5]
+    - name: back
+      input_topic: back/bluefox/image_raw
+      output_topic: uvdar/back/detector/points_seen
+      detect_sun_points: false
+      publish_sun_points: false
+      sun_output_topic: uvdar/back/detector/points_seen/sun
+      publish_visualization: false
+      visualization_topic: uvdar/back/detector/detection_visualization
+      mask_file: ""
+      backend: gpu
+      threshold: 140
+      threshold_diff: 60
+      threshold_sun: 240
+      min_sun_marker_distance: 20
+      max_markers_count: 300
+      max_sun_points_count: 72000
+      radii: [3, 5]
+
+tracking:
+  # Select "ami" for the AMI tracker or "generalized" for covariance-aware tracking.
+  implementation: generalized
+  debug: false
+  gui: false
+  initial_delay_sec: 0.0
+  queue_depth: 10
+  thread_pool_size: 3
+  max_points_per_image: 100
+  max_px_shift_x: 3
+  max_px_shift_y: 3
+  max_zeros_consecutive: 10
+  stored_seq_len_factor: 5
+  max_buffer_length: 5000
+  poly_order: 4
+  decay_factor: 0.1
+  confidence_probability: 95.0
+  # Generalized tracker only: Mahalanobis gate width in standard deviations.
+  association_gate_sigma: 3.0
+  # Generalized tracker only: fallback variance for invalid or missing detector covariance.
+  default_measurement_variance: 1.0
+  # Generalized tracker only: isotropic per-frame prediction noise added in px^2.
+  process_noise_variance: 1.0
+  allowed_BER_per_seq: 0
+  manchester_code: false
+  # If set, sequence_file replaces the inline library below. All loaded
+  # sequences must be non-empty and have equal length. Resolved against this file's
+  # directory, which is share/uvdar_core/config - the same place selected.txt lives, so
+  # it needs no change to travel with this file.
+  sequence_file: "./selected.txt"
+  sequences:
+    - "0011101101"
+    - "0010110101"
+    - "0101010111"
+    - "0010011011"
+    - "0001100111"
+  inputs:
+    - name: left
+      input_topic: uvdar/left/detector/points_seen
+      input_image_topic: left/bluefox/image_raw
+      output_topic: uvdar/left/tracker/blinkers
+      publish_visualization: true
+      visualization_topic: uvdar/left/tracker/visualization
+    - name: right
+      input_topic: uvdar/right/detector/points_seen
+      input_image_topic: right/bluefox/image_raw
+      output_topic: uvdar/right/tracker/blinkers
+      publish_visualization: true
+      visualization_topic: uvdar/right/tracker/visualization
+    - name: back
+      input_topic: uvdar/back/detector/points_seen
+      input_image_topic: back/bluefox/image_raw
+      output_topic: uvdar/back/tracker/blinkers
+      publish_visualization: true
+      visualization_topic: uvdar/back/tracker/visualization
+
+bearing:
+  queue_depth: 10
+  # The frame the bearings are published in: this vehicle's body frame, whatever the
+  # vehicle is called. Each camera's optical frame is a child of it via the mounts
+  # three_bluefox.launch.py publishes, and the bearing node rotates every camera's rays
+  # through that transform before publishing - so the one stream describes one frame.
+  #
+  # default_bearing.yaml pins this to uav4/fcu, which for any other vehicle names a
+  # frame of a different robot: the camera frames are mounted under <uav>/fcu here, so
+  # the lookup fails and every observation is dropped with a throttled warning.
+  output_frame: $UAV_NAME/fcu
+  # One topic for the whole section, and one publisher for all three inputs. Consumers
+  # subscribe here; see the note at the top of the file.
+  output_topic: uvdar/bearing/observations
+  publish_predictions: true
+  publish_unidentified: true
+  covariance_floor_px2: 1.0e-6
+  fallback_pixel_variance_px2: 1.0
+  # left and right name the real bf_uv_<serial>.yaml files rather than the
+  # bf_left.yaml / bf_right.yaml names default_bearing.yaml uses. Those two are
+  # committed as symlinks whose target is an absolute path under /home/mrs on the
+  # machine that committed them, so anywhere else - including this workspace - they
+  # are dangling and the lens model cannot be loaded. The mapping the symlinks
+  # encode (left -> 25001879, right -> 25001954) is used directly here; a relative
+  # path resolves against this file's directory, and the real files travel with the
+  # repo. Note the warning in default_bearing.yaml's and this file's world about
+  # swapping calibration files: these two are far apart, so confirm each camera's
+  # serial against `ros2 run bluefox2 bluefox2_list_cameras` before trusting one.
+  inputs:
+    - name: left
+      input_topic: uvdar/left/tracker/blinkers
+      camera_frame: $UAV_NAME/bluefox_left
+      calib_file: camera/bluefox_ocam_calib/bf_uv_25001879.yaml
+    - name: right
+      input_topic: uvdar/right/tracker/blinkers
+      camera_frame: $UAV_NAME/bluefox_right
+      calib_file: camera/bluefox_ocam_calib/bf_uv_25001954.yaml
+    # No calibration exists for this camera yet, which is deliberate - see the note
+    # at the top of the file. Put the real file at this path after calibrator.launch.py.
+    - name: back
+      input_topic: uvdar/back/tracker/blinkers
+      camera_frame: $UAV_NAME/bluefox_back
+      calib_file: camera/bluefox_ocam_calib/bf_back.yaml
